@@ -4,6 +4,7 @@ import json
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
+from persistant_agent import codex_rpc, docker_registry
 from persistant_agent import machine_api
 
 
@@ -15,7 +16,7 @@ def test_agent_info_from_docker_inspect():
         "NetworkSettings": {"Ports": {"8080/tcp": [{"HostPort": "57779"}]}},
     }
 
-    agent = machine_api._agent_info(container)
+    agent = docker_registry.agent_record(container)
 
     assert agent.name == "backend"
     assert agent.repo_path == "/repo/backend"
@@ -24,16 +25,20 @@ def test_agent_info_from_docker_inspect():
 
 
 def test_list_agents_filters_persistant_agent_containers(monkeypatch):
-    monkeypatch.setattr(machine_api, "_docker_container_names", lambda: ["persistant-agent-a"])
     monkeypatch.setattr(
         machine_api,
-        "_inspect_container",
-        lambda _: {
-            "Name": "/persistant-agent-a",
-            "Config": {"Labels": {}},
-            "State": {"Status": "running"},
-            "NetworkSettings": {"Ports": {"8080/tcp": [{"HostPort": "50001"}]}},
-        },
+        "list_agent_records",
+        lambda: [
+            docker_registry.AgentRecord(
+                name="a",
+                container="persistant-agent-a",
+                status="running",
+                repo_path=None,
+                port=50001,
+                api_url="http://127.0.0.1:50001",
+                websocket_url="ws://127.0.0.1:50001",
+            )
+        ],
     )
 
     response = TestClient(machine_api.app).get("/agents")
@@ -53,7 +58,11 @@ def test_machine_root_serves_web_ui():
 def test_start_agent_invokes_compose_and_waits(monkeypatch, tmp_path):
     calls = []
     monkeypatch.setattr(machine_api, "_run", lambda command, env=None: calls.append((command, env)) or type("R", (), {"stdout": ""})())
-    monkeypatch.setattr(machine_api, "_wait_for_agent", lambda name: machine_api.AgentInfo(name=name, container="persistant-agent-x", status="running"))
+    monkeypatch.setattr(
+        machine_api,
+        "_wait_for_agent",
+        lambda name: machine_api.AgentRecord(name=name, container="persistant-agent-x", status="running", repo_path=None, port=None, api_url=None, websocket_url=None),
+    )
 
     response = TestClient(machine_api.app).post("/agents/x/start", json={"repo_path": str(tmp_path)})
 
@@ -64,7 +73,7 @@ def test_start_agent_invokes_compose_and_waits(monkeypatch, tmp_path):
 
 
 def test_write_repo_file_rejects_bad_paths_and_base64(tmp_path):
-    agent = machine_api.AgentInfo(name="a", container="persistant-agent-a", status="running", repo_path=str(tmp_path))
+    agent = machine_api.AgentRecord(name="a", container="persistant-agent-a", status="running", repo_path=str(tmp_path), port=None, api_url=None, websocket_url=None)
 
     for payload in [
         machine_api.FilePayload(path="/tmp/x", content_base64="eA=="),
@@ -72,7 +81,7 @@ def test_write_repo_file_rejects_bad_paths_and_base64(tmp_path):
         machine_api.FilePayload(path="x", content_base64="not-base64"),
     ]:
         try:
-            machine_api._write_repo_file(agent, payload)
+            machine_api.write_repo_file(agent, payload.path, payload.content_base64)
         except HTTPException as exc:
             assert exc.status_code == 400
         else:
@@ -80,15 +89,17 @@ def test_write_repo_file_rejects_bad_paths_and_base64(tmp_path):
 
 
 def test_send_files_writes_to_repo_and_optionally_messages(monkeypatch, tmp_path):
-    agent = machine_api.AgentInfo(
+    agent = machine_api.AgentRecord(
         name="a",
         container="persistant-agent-a",
         status="running",
         repo_path=str(tmp_path),
+        port=None,
+        api_url=None,
         websocket_url="ws://agent",
     )
     monkeypatch.setattr(machine_api, "_get_agent_or_404", lambda name: agent)
-    monkeypatch.setattr(machine_api, "_send_codex_turn", lambda agent, message, thread_id=None, model=None, effort=None: {"thread_id": "t1", "text": message})
+    monkeypatch.setattr(machine_api, "send_turn", lambda agent, message, thread_id=None: {"thread_id": "t1", "text": message})
 
     response = TestClient(machine_api.app).post(
         "/agents/a/files",
@@ -130,19 +141,24 @@ def test_send_message_uses_codex_app_server_json_rpc(monkeypatch):
         def send(self, payload):
             sent.append(json.loads(payload))
 
-    monkeypatch.setattr(
-        machine_api,
-        "_get_agent_or_404",
-        lambda name: machine_api.AgentInfo(name=name, container="persistant-agent-a", status="running", websocket_url="ws://agent"),
+    monkeypatch.setattr(codex_rpc, "agent_ws_token", lambda container: "token")
+    monkeypatch.setattr(codex_rpc.websockets.sync.client, "connect", lambda *args, **kwargs: FakeWebSocket())
+
+    response = codex_rpc.send_turn(
+        docker_registry.AgentRecord(
+            name="a",
+            container="persistant-agent-a",
+            status="running",
+            repo_path=None,
+            port=None,
+            api_url=None,
+            websocket_url="ws://agent",
+        ),
+        "hello",
     )
-    monkeypatch.setattr(machine_api, "_agent_ws_token", lambda container: "token")
-    monkeypatch.setattr(machine_api.websockets.sync.client, "connect", lambda *args, **kwargs: FakeWebSocket())
 
-    response = TestClient(machine_api.app).post("/agents/a/messages", json={"message": "hello"})
-
-    assert response.status_code == 200
-    assert response.json()["thread_id"] == "thread-1"
-    assert response.json()["text"] == "hello"
+    assert response["thread_id"] == "thread-1"
+    assert response["text"] == "hello"
     assert [item["method"] for item in sent] == ["initialize", "initialized", "thread/start", "turn/start"]
     assert sent[2]["params"]["sandbox"] == "danger-full-access"
     assert sent[3]["params"]["input"] == [{"type": "text", "text": "hello"}]
