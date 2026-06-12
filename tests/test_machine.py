@@ -41,7 +41,8 @@ def test_root_serves_static_web_ui():
     response = TestClient(machine_app.app).get("/")
 
     assert response.status_code == 200
-    assert "new WebSocket(current.websocket_url)" in response.text
+    assert "new WebSocket(agentSocketUrl(current))" in response.text
+    assert "/agents/${encodeURIComponent(agent.name)}/ws" in response.text
     assert "thread/start" in response.text
 
 

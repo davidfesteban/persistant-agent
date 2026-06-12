@@ -1,7 +1,10 @@
+import asyncio
 import time
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, status
+import websockets
+from websockets.exceptions import ConnectionClosed
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, status
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
@@ -28,6 +31,39 @@ def agents() -> dict:
 @app.get("/agents/{name}", response_model=docker.Agent)
 def get_agent(name: str) -> docker.Agent:
     return _agent(name)
+
+
+@app.websocket("/agents/{name}/ws")
+async def agent_websocket(websocket: WebSocket, name: str) -> None:
+    try:
+        agent = _agent(name)
+    except HTTPException:
+        await websocket.close(code=1008)
+        return
+    if not agent.websocket_url:
+        await websocket.close(code=1011)
+        return
+
+    await websocket.accept()
+    try:
+        async with websockets.connect(agent.websocket_url) as codex:
+            browser_to_codex = asyncio.create_task(_browser_to_codex(websocket, codex))
+            codex_to_browser = asyncio.create_task(_codex_to_browser(websocket, codex))
+            done, pending = await asyncio.wait(
+                {browser_to_codex, codex_to_browser},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            for task in pending:
+                task.cancel()
+            await asyncio.gather(*pending, return_exceptions=True)
+            for task in done:
+                if task.cancelled():
+                    continue
+                error = task.exception()
+                if error and not isinstance(error, WebSocketDisconnect):
+                    raise error
+    except ConnectionClosed:
+        pass
 
 
 @app.post("/agents/{name}/start", response_model=docker.Agent)
@@ -70,3 +106,13 @@ def _wait(name: str) -> docker.Agent:
     raise HTTPException(
         status_code=status.HTTP_504_GATEWAY_TIMEOUT, detail="Agent did not start"
     )
+
+
+async def _browser_to_codex(websocket: WebSocket, codex) -> None:
+    while True:
+        await codex.send(await websocket.receive_text())
+
+
+async def _codex_to_browser(websocket: WebSocket, codex) -> None:
+    async for message in codex:
+        await websocket.send_text(message)

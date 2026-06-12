@@ -31,13 +31,11 @@ start:
 	@test -n "$(CODE_PATH)" || { echo "Missing code path. Usage: make start /absolute/path/to/repo agent-name"; exit 2; }
 	@test -n "$(AGENT_NAME)" || { echo "Missing agent name. Usage: make start /absolute/path/to/repo agent-name"; exit 2; }
 	@test -d "$(CODE_PATH)" || { echo "Code path does not exist: $(CODE_PATH)"; exit 2; }
-	@payload=$$("$(PYTHON)" -c 'import json,sys; print(json.dumps({"repo_path": sys.argv[1]}))' "$(CODE_PATH)"); \
-	curl -fsS -X POST "$(MACHINE_URL)/agents/$(AGENT_NAME)/start" -H 'content-type: application/json' -d "$$payload"; \
-	printf '\n'
+	@AGENT_NAME="$(AGENT_NAME)" REPOSITORY_PATH="$(CODE_PATH)" docker compose -p "persistant-agent-$(AGENT_NAME)" up -d --build
 
 stop:
 	@test -n "$(AGENT_NAME)" || { echo "Missing agent name. Usage: make stop agent-name"; exit 2; }
-	@curl -fsS -X POST "$(MACHINE_URL)/agents/$(AGENT_NAME)/stop"; printf '\n'
+	@AGENT_NAME="$(AGENT_NAME)" REPOSITORY_PATH="$(CURDIR)" docker compose -p "persistant-agent-$(AGENT_NAME)" down
 
 agents:
 	@curl -fsS "$(MACHINE_URL)/agents"; printf '\n'

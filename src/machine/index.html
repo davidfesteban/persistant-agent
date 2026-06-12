@@ -221,11 +221,16 @@ async function loadAgents() {
 function selectAgent(agent) {
   current = agent;
   selectedEl.textContent = agent.name;
-  endpointEl.textContent = agent.websocket_url || '';
+  endpointEl.textContent = agentSocketUrl(agent);
   logEl.innerHTML = '';
   write(`selected ${agent.name}`);
   connect();
   loadAgents();
+}
+
+function agentSocketUrl(agent) {
+  const scheme = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  return `${scheme}//${window.location.host}/agents/${encodeURIComponent(agent.name)}/ws`;
 }
 
 function connect() {
@@ -238,7 +243,7 @@ function connect() {
     return;
   }
   setState('connecting');
-  socket = new WebSocket(current.websocket_url);
+  socket = new WebSocket(agentSocketUrl(current));
   socket.onopen = () => {
     initialized = initialize();
   };
