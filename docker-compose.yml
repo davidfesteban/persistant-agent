@@ -10,19 +10,6 @@ services:
       - "${PERSISTANT_AGENT_BIND:-127.0.0.1::8080}"
     environment:
       CODEX_HOME: /root/.codex
-      CODEX_WS_TOKEN: "${PERSISTANT_AGENT_WS_TOKEN:-persistant-agent-local-token}"
-    command:
-      - /bin/sh
-      - -lc
-      - >
-        printf '%s' "$$CODEX_WS_TOKEN" > /tmp/codex-ws-token
-        && chmod 600 /tmp/codex-ws-token
-        && exec codex app-server
-        --listen ws://0.0.0.0:8080
-        --ws-auth capability-token
-        --ws-token-file /tmp/codex-ws-token
-        -c sandbox_mode=\"danger-full-access\"
-        -c approval_policy=\"never\"
     volumes:
       - "${REPOSITORY_PATH:?Set REPOSITORY_PATH to the repo you want this agent to control}:/workspace/repo"
       - "${HOME}/.codex/auth.json:/root/.codex/auth.json:ro"

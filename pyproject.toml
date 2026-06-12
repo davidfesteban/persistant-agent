@@ -20,3 +20,4 @@ test = [
 
 [tool.setuptools.packages.find]
 where = ["src"]
+include = ["machine*"]
