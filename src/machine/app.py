@@ -13,6 +13,8 @@ from machine import docker
 
 class AgentStart(BaseModel):
     repo_path: str = Field(min_length=1)
+    model: str = "gpt-5.5"
+    reasoning_effort: str = "medium"
 
 
 app = FastAPI(title="Persistant Agent Machine", version="0.1.0")
@@ -74,7 +76,12 @@ def start_agent(name: str, request: AgentStart) -> docker.Agent:
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Repository path does not exist",
         )
-    docker.start_agent(name, str(repo))
+    docker.start_agent(
+        name,
+        str(repo),
+        model=request.model,
+        reasoning_effort=request.reasoning_effort,
+    )
     return _wait(name)
 
 

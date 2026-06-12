@@ -10,6 +10,8 @@ services:
       - "${PERSISTANT_AGENT_BIND:-127.0.0.1::8080}"
     environment:
       CODEX_HOME: /root/.codex
+      CODEX_MODEL: "${CODEX_MODEL:-gpt-5.5}"
+      CODEX_REASONING_EFFORT: "${CODEX_REASONING_EFFORT:-medium}"
     volumes:
       - "${REPOSITORY_PATH:?Set REPOSITORY_PATH to the repo you want this agent to control}:/workspace/repo"
       - "${HOME}/.codex/auth.json:/root/.codex/auth.json:ro"

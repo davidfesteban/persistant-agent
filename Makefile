@@ -5,6 +5,8 @@ PYTHON ?= $(shell if [ -x .venv/bin/python ]; then printf '.venv/bin/python'; el
 MACHINE_HOST ?= 127.0.0.1
 MACHINE_PORT ?= 8765
 MACHINE_URL ?= http://$(MACHINE_HOST):$(MACHINE_PORT)
+MODEL ?= gpt-5.5
+REASONING_EFFORT ?= medium
 
 ACTION := $(word 1,$(MAKECMDGOALS))
 ARG1 := $(word 2,$(MAKECMDGOALS))
@@ -20,7 +22,7 @@ help:
 	@printf '%s\n' \
 		'Usage:' \
 		'  make machine' \
-		'  make start /absolute/path/to/repo agent-name' \
+		'  make start /absolute/path/to/repo agent-name [MODEL=gpt-5.5] [REASONING_EFFORT=medium]' \
 		'  make stop agent-name' \
 		'  make agents'
 
@@ -31,11 +33,11 @@ start:
 	@test -n "$(CODE_PATH)" || { echo "Missing code path. Usage: make start /absolute/path/to/repo agent-name"; exit 2; }
 	@test -n "$(AGENT_NAME)" || { echo "Missing agent name. Usage: make start /absolute/path/to/repo agent-name"; exit 2; }
 	@test -d "$(CODE_PATH)" || { echo "Code path does not exist: $(CODE_PATH)"; exit 2; }
-	@AGENT_NAME="$(AGENT_NAME)" REPOSITORY_PATH="$(CODE_PATH)" docker compose -p "persistant-agent-$(AGENT_NAME)" up -d --build
+	@AGENT_NAME="$(AGENT_NAME)" REPOSITORY_PATH="$(CODE_PATH)" CODEX_MODEL="$(MODEL)" CODEX_REASONING_EFFORT="$(REASONING_EFFORT)" docker compose -p "persistant-agent-$(AGENT_NAME)" up -d --build
 
 stop:
 	@test -n "$(AGENT_NAME)" || { echo "Missing agent name. Usage: make stop agent-name"; exit 2; }
-	@AGENT_NAME="$(AGENT_NAME)" REPOSITORY_PATH="$(CURDIR)" docker compose -p "persistant-agent-$(AGENT_NAME)" down
+	@AGENT_NAME="$(AGENT_NAME)" REPOSITORY_PATH="$(CURDIR)" CODEX_MODEL="$(MODEL)" CODEX_REASONING_EFFORT="$(REASONING_EFFORT)" docker compose -p "persistant-agent-$(AGENT_NAME)" down
 
 agents:
 	@curl -fsS "$(MACHINE_URL)/agents"; printf '\n'

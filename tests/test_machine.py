@@ -57,6 +57,8 @@ def test_start_agent_invokes_compose(monkeypatch, tmp_path):
     assert calls[0][0] == ["docker", "compose", "-p", "persistant-agent-api", "up", "-d", "--build"]
     assert calls[0][1]["AGENT_NAME"] == "api"
     assert calls[0][1]["REPOSITORY_PATH"] == str(tmp_path.resolve())
+    assert calls[0][1]["CODEX_MODEL"] == "gpt-5.5"
+    assert calls[0][1]["CODEX_REASONING_EFFORT"] == "medium"
     assert set(calls[0][1]) >= {"AGENT_NAME", "REPOSITORY_PATH"}
 
 

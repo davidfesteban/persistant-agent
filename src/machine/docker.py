@@ -34,11 +34,22 @@ def get_agent(name: str) -> Agent | None:
     return next((agent for agent in list_agents() if agent.name == name), None)
 
 
-def start_agent(name: str, repo_path: str) -> None:
+def start_agent(
+    name: str,
+    repo_path: str,
+    model: str = "gpt-5.5",
+    reasoning_effort: str = "medium",
+) -> None:
     repo = Path(repo_path).expanduser().resolve()
     run(
         ["docker", "compose", "-p", project(name), "up", "-d", "--build"],
-        env={**os.environ, "AGENT_NAME": name, "REPOSITORY_PATH": str(repo)},
+        env={
+            **os.environ,
+            "AGENT_NAME": name,
+            "REPOSITORY_PATH": str(repo),
+            "CODEX_MODEL": model,
+            "CODEX_REASONING_EFFORT": reasoning_effort,
+        },
     )
 
 
