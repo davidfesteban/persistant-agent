@@ -95,7 +95,13 @@ components:
           type: string
         docs_url:
           type: string
+        websocket_url:
+          type: string
         commands:
+          type: object
+          additionalProperties:
+            type: string
+        websocket_commands:
           type: object
           additionalProperties:
             type: string
