@@ -2,6 +2,7 @@ import time
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, status
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
 from machine import docker
@@ -15,8 +16,8 @@ app = FastAPI(title="Persistant Agent Machine", version="0.1.0")
 
 
 @app.get("/")
-def root() -> dict:
-    return {"status": "ok", "openapi": "/openapi.json", "agents": "/agents"}
+def root() -> HTMLResponse:
+    return HTMLResponse((Path(__file__).with_name("index.html")).read_text())
 
 
 @app.get("/agents")

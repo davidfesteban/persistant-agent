@@ -1,0 +1,330 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Persistant Agent</title>
+  <style>
+    :root {
+      --bg: #f6f5f2;
+      --panel: #ffffff;
+      --line: #d9d6cf;
+      --text: #1f1f1b;
+      --muted: #6b675f;
+      --accent: #1f6f5b;
+      --accent-strong: #174f41;
+      --code: #171915;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--text);
+      background: linear-gradient(135deg, #f8f7f3 0%, #eeeae0 100%);
+      font: 14px ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    main {
+      display: grid;
+      grid-template-columns: 320px minmax(0, 1fr);
+      min-height: 100vh;
+    }
+    aside {
+      border-right: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.72);
+      padding: 16px;
+    }
+    section {
+      min-width: 0;
+      padding: 16px;
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr) auto;
+      gap: 12px;
+    }
+    h1 {
+      margin: 0;
+      font-size: 18px;
+      font-weight: 700;
+      letter-spacing: 0;
+    }
+    button, textarea {
+      font: inherit;
+    }
+    button {
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--panel);
+      color: var(--text);
+      padding: 8px 10px;
+      cursor: pointer;
+    }
+    button.primary {
+      border-color: var(--accent);
+      background: var(--accent);
+      color: #fff;
+    }
+    button:hover { border-color: var(--accent); }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+    .agent {
+      width: 100%;
+      display: block;
+      text-align: left;
+      margin: 8px 0;
+      background: var(--panel);
+    }
+    .agent.active {
+      border-color: var(--accent);
+      box-shadow: inset 3px 0 0 var(--accent);
+    }
+    .name {
+      display: block;
+      font-weight: 700;
+      margin-bottom: 3px;
+    }
+    .meta {
+      color: var(--muted);
+      font-size: 12px;
+      overflow-wrap: anywhere;
+    }
+    .status {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 99px;
+      background: #9d978d;
+    }
+    .dot.live { background: var(--accent); }
+    #log {
+      min-height: 0;
+      overflow: auto;
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--code);
+      color: #f5f2ea;
+      white-space: pre-wrap;
+    }
+    .entry {
+      margin: 0 0 12px;
+      line-height: 1.45;
+    }
+    .entry.user { color: #cfeee5; }
+    .entry.system { color: #c4beb2; }
+    .composer {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 10px;
+    }
+    textarea {
+      width: 100%;
+      min-height: 92px;
+      resize: vertical;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px;
+      background: var(--panel);
+      color: var(--text);
+    }
+    @media (max-width: 760px) {
+      main { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
+      aside { border-right: 0; border-bottom: 1px solid var(--line); }
+      .composer { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <aside>
+    <div class="top">
+      <h1>Agents</h1>
+      <button id="refresh" type="button">Refresh</button>
+    </div>
+    <div id="agents"></div>
+  </aside>
+  <section>
+    <div class="top">
+      <div>
+        <strong id="selected">Select an agent</strong>
+        <div class="meta" id="endpoint"></div>
+      </div>
+      <div class="status"><span id="dot" class="dot"></span><span id="state">disconnected</span></div>
+    </div>
+    <div id="log"></div>
+    <div class="composer">
+      <textarea id="message" placeholder="Message"></textarea>
+      <button id="send" class="primary" type="button" disabled>Send</button>
+    </div>
+  </section>
+</main>
+<script>
+const agentsEl = document.getElementById('agents');
+const selectedEl = document.getElementById('selected');
+const endpointEl = document.getElementById('endpoint');
+const logEl = document.getElementById('log');
+const messageEl = document.getElementById('message');
+const sendEl = document.getElementById('send');
+const refreshEl = document.getElementById('refresh');
+const stateEl = document.getElementById('state');
+const dotEl = document.getElementById('dot');
+
+let agents = [];
+let current = null;
+let socket = null;
+let initialized = null;
+let nextId = 1;
+let pending = new Map();
+let threadByAgent = new Map();
+let activeReply = null;
+
+function setState(text, live = false) {
+  stateEl.textContent = text;
+  dotEl.classList.toggle('live', live);
+  sendEl.disabled = !live || !current;
+}
+
+function write(text, kind = 'system') {
+  const item = document.createElement('div');
+  item.className = `entry ${kind}`;
+  item.textContent = text;
+  logEl.appendChild(item);
+  logEl.scrollTop = logEl.scrollHeight;
+  return item;
+}
+
+async function loadAgents() {
+  const response = await fetch('/agents');
+  const data = await response.json();
+  agents = data.agents || [];
+  agentsEl.innerHTML = '';
+  for (const agent of agents) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = `agent ${current && current.name === agent.name ? 'active' : ''}`;
+    button.innerHTML = `<span class="name">${agent.name}</span><span class="meta">${agent.status} - ${agent.websocket_url || 'no websocket'}</span>`;
+    button.onclick = () => selectAgent(agent);
+    agentsEl.appendChild(button);
+  }
+}
+
+function selectAgent(agent) {
+  current = agent;
+  selectedEl.textContent = agent.name;
+  endpointEl.textContent = agent.websocket_url || '';
+  logEl.innerHTML = '';
+  write(`selected ${agent.name}`);
+  connect();
+  loadAgents();
+}
+
+function connect() {
+  if (socket) socket.close();
+  pending = new Map();
+  initialized = null;
+  activeReply = null;
+  if (!current || !current.websocket_url) {
+    setState('no websocket');
+    return;
+  }
+  setState('connecting');
+  socket = new WebSocket(current.websocket_url);
+  socket.onopen = () => {
+    initialized = initialize();
+  };
+  socket.onmessage = event => handleEvent(JSON.parse(event.data));
+  socket.onclose = () => setState('disconnected');
+  socket.onerror = () => setState('error');
+}
+
+async function initialize() {
+  await call('initialize', {
+    clientInfo: {name: 'persistant-agent-web', title: 'Persistant Agent Web', version: '0.1.0'},
+    capabilities: {experimentalApi: true}
+  });
+  notify('initialized', {});
+  setState('connected', true);
+}
+
+function call(method, params) {
+  const id = nextId++;
+  socket.send(JSON.stringify({id, method, params}));
+  return new Promise((resolve, reject) => pending.set(id, {resolve, reject}));
+}
+
+function notify(method, params) {
+  socket.send(JSON.stringify({method, params}));
+}
+
+function handleEvent(event) {
+  if (event.id && pending.has(event.id)) {
+    const waiter = pending.get(event.id);
+    pending.delete(event.id);
+    if (event.error) waiter.reject(event.error);
+    else waiter.resolve(event.result || {});
+    return;
+  }
+  if (event.method === 'item/agentMessage/delta') {
+    if (!activeReply) activeReply = write('', 'assistant');
+    activeReply.textContent += (event.params && event.params.delta) || '';
+    logEl.scrollTop = logEl.scrollHeight;
+    return;
+  }
+  if (event.method === 'turn/completed') {
+    activeReply = null;
+    setState('connected', true);
+    return;
+  }
+  if (event.method === 'error') {
+    write(JSON.stringify(event.params || event), 'system');
+    setState('connected', true);
+  }
+}
+
+async function sendMessage() {
+  const text = messageEl.value.trim();
+  if (!text || !current) return;
+  messageEl.value = '';
+  sendEl.disabled = true;
+  setState('running', false);
+  write(`> ${text}`, 'user');
+  try {
+    await initialized;
+    let threadId = threadByAgent.get(current.name);
+    if (!threadId) {
+      const result = await call('thread/start', {
+        cwd: '/workspace/repo',
+        approvalPolicy: 'never',
+        sandbox: 'danger-full-access',
+        ephemeral: false
+      });
+      threadId = result.thread.id;
+      threadByAgent.set(current.name, threadId);
+    }
+    await call('turn/start', {threadId, cwd: '/workspace/repo', input: [{type: 'text', text}]});
+  } catch (error) {
+    write(JSON.stringify(error), 'system');
+    setState('connected', true);
+  }
+}
+
+refreshEl.onclick = loadAgents;
+sendEl.onclick = sendMessage;
+messageEl.addEventListener('keydown', event => {
+  if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') sendMessage();
+});
+
+loadAgents();
+</script>
+</body>
+</html>

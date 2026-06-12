@@ -37,6 +37,14 @@ def test_routes_list_agents(monkeypatch):
     assert response.json()["agents"][0]["name"] == "api"
 
 
+def test_root_serves_static_web_ui():
+    response = TestClient(machine_app.app).get("/")
+
+    assert response.status_code == 200
+    assert "new WebSocket(current.websocket_url)" in response.text
+    assert "thread/start" in response.text
+
+
 def test_start_agent_invokes_compose(monkeypatch, tmp_path):
     calls = []
     monkeypatch.setattr(docker, "run", lambda command, env=None: calls.append((command, env)) or type("R", (), {"stdout": ""})())

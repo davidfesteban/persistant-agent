@@ -21,3 +21,6 @@ test = [
 [tool.setuptools.packages.find]
 where = ["src"]
 include = ["machine*"]
+
+[tool.setuptools.package-data]
+machine = ["index.html"]
