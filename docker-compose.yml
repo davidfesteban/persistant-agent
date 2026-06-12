@@ -1,0 +1,21 @@
+services:
+  agent:
+    build: .
+    container_name: "persistant-agent-${AGENT_NAME:?Set AGENT_NAME}"
+    ports:
+      - "${PERSISTANT_AGENT_BIND:-127.0.0.1::8080}"
+    environment:
+      AGENT_NAME: "${AGENT_NAME:?Set AGENT_NAME}"
+      TARGET_REPO: /workspace/repo
+      CODEX_COMMAND: codex
+      CODEX_ARGS: '-c sandbox_mode="danger-full-access" -c approval_policy="never"'
+      CODEX_MODEL_COMMAND_TEMPLATE: "/model {model}"
+      CODEX_EFFORT_COMMAND_TEMPLATE: "/reasoning {effort}"
+      CODEX_CLEAR_COMMAND: "/clear"
+      CODEX_COMPACT_COMMAND: "/compact"
+      API_TOKEN: "${PERSISTANT_AGENT_TOKEN:-}"
+    volumes:
+      - "${REPOSITORY_PATH:?Set REPOSITORY_PATH to the repo you want this agent to control}:/workspace/repo"
+      - "${HOME}/.codex:/root/.codex"
+    stdin_open: true
+    tty: true
