@@ -2,20 +2,31 @@ services:
   agent:
     build: .
     container_name: "persistant-agent-${AGENT_NAME:?Set AGENT_NAME}"
+    labels:
+      persistant-agent.managed: "true"
+      persistant-agent.name: "${AGENT_NAME:?Set AGENT_NAME}"
+      persistant-agent.repo: "${REPOSITORY_PATH:?Set REPOSITORY_PATH to the repo you want this agent to control}"
     ports:
       - "${PERSISTANT_AGENT_BIND:-127.0.0.1::8080}"
     environment:
-      AGENT_NAME: "${AGENT_NAME:?Set AGENT_NAME}"
-      TARGET_REPO: /workspace/repo
-      CODEX_COMMAND: codex
-      CODEX_ARGS: '-c sandbox_mode="danger-full-access" -c approval_policy="never"'
-      CODEX_MODEL_COMMAND_TEMPLATE: "/model {model}"
-      CODEX_EFFORT_COMMAND_TEMPLATE: "/reasoning {effort}"
-      CODEX_CLEAR_COMMAND: "/clear"
-      CODEX_COMPACT_COMMAND: "/compact"
-      API_TOKEN: "${PERSISTANT_AGENT_TOKEN:-}"
+      CODEX_HOME: /root/.codex
+      CODEX_WS_TOKEN: "${PERSISTANT_AGENT_WS_TOKEN:-persistant-agent-local-token}"
+    command:
+      - /bin/sh
+      - -lc
+      - >
+        printf '%s' "$$CODEX_WS_TOKEN" > /tmp/codex-ws-token
+        && chmod 600 /tmp/codex-ws-token
+        && exec codex app-server
+        --listen ws://0.0.0.0:8080
+        --ws-auth capability-token
+        --ws-token-file /tmp/codex-ws-token
+        -c sandbox_mode=\"danger-full-access\"
+        -c approval_policy=\"never\"
     volumes:
       - "${REPOSITORY_PATH:?Set REPOSITORY_PATH to the repo you want this agent to control}:/workspace/repo"
-      - "${HOME}/.codex:/root/.codex"
-    stdin_open: true
-    tty: true
+      - "${HOME}/.codex/auth.json:/root/.codex/auth.json:ro"
+      - "${HOME}/.codex/config.toml:/root/.codex/config.toml:ro"
+      - "${HOME}/.codex/AGENTS.md:/root/.codex/AGENTS.md:ro"
+      - "${HOME}/.gitconfig:/root/.gitconfig:ro"
+      - "${HOME}/.ssh:/root/.ssh:ro"
