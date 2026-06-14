@@ -62,6 +62,14 @@
       background: var(--accent);
       color: #fff;
     }
+    button.danger {
+      border-color: #b42318;
+      color: #b42318;
+    }
+    button.danger:hover {
+      border-color: #b42318;
+      background: #fff4f2;
+    }
     button:hover { border-color: var(--accent); }
     button:disabled { opacity: 0.5; cursor: not-allowed; }
     .top {
@@ -98,6 +106,18 @@
       gap: 6px;
       color: var(--muted);
       font-size: 12px;
+      white-space: nowrap;
+    }
+    .agent-actions {
+      display: grid;
+      grid-template-columns: auto auto;
+      align-items: center;
+      justify-content: end;
+      gap: 6px 10px;
+    }
+    .agent-actions .meta {
+      grid-column: 1 / -1;
+      text-align: right;
     }
     .dot {
       width: 8px;
@@ -159,7 +179,11 @@
         <strong id="selected">Select an agent</strong>
         <div class="meta" id="endpoint"></div>
       </div>
-      <div class="status"><span id="dot" class="dot"></span><span id="state">disconnected</span></div>
+      <div class="agent-actions">
+        <div class="status"><span id="dot" class="dot"></span><span id="state">disconnected</span></div>
+        <div class="meta" id="activity"></div>
+        <button id="stop" class="danger" type="button" disabled>Stop</button>
+      </div>
     </div>
     <div id="log"></div>
     <div class="composer">
@@ -175,32 +199,144 @@ const endpointEl = document.getElementById('endpoint');
 const logEl = document.getElementById('log');
 const messageEl = document.getElementById('message');
 const sendEl = document.getElementById('send');
+const stopEl = document.getElementById('stop');
 const refreshEl = document.getElementById('refresh');
 const stateEl = document.getElementById('state');
 const dotEl = document.getElementById('dot');
+const activityEl = document.getElementById('activity');
 
 let agents = [];
 let current = null;
-let socket = null;
-let initialized = null;
 let nextId = 1;
-let pending = new Map();
-let threadByAgent = new Map();
-let activeReply = null;
+let clientByAgent = new Map();
+let stateByAgent = loadStoredState();
 
-function setState(text, live = false) {
-  stateEl.textContent = text;
-  dotEl.classList.toggle('live', live);
-  sendEl.disabled = !live || !current;
+function loadStoredState() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem('persistant-agent-state-v1') || '{}');
+    return new Map(Object.entries(parsed).map(([name, state]) => [name, {
+      entries: Array.isArray(state.entries) ? state.entries : [],
+      threadId: state.threadId || null,
+      draft: state.draft || '',
+      status: 'disconnected',
+      activity: '',
+      live: false,
+      busySince: null
+    }]));
+  } catch {
+    return new Map();
+  }
 }
 
-function write(text, kind = 'system') {
+function persistState() {
+  const value = {};
+  for (const [name, state] of stateByAgent) {
+    value[name] = {
+      entries: state.entries.slice(-200),
+      threadId: state.threadId,
+      draft: state.draft
+    };
+  }
+  localStorage.setItem('persistant-agent-state-v1', JSON.stringify(value));
+}
+
+function stateFor(name) {
+  if (!stateByAgent.has(name)) {
+    stateByAgent.set(name, {
+      entries: [],
+      threadId: null,
+      draft: '',
+      status: 'disconnected',
+      activity: '',
+      live: false,
+      busySince: null
+    });
+  }
+  return stateByAgent.get(name);
+}
+
+function clientFor(agent) {
+  const existing = clientByAgent.get(agent.name);
+  if (existing) {
+    existing.agent = agent;
+    return existing;
+  }
+  const client = {
+    agent,
+    socket: null,
+    pending: new Map(),
+    initialized: null,
+    activeReplyIndex: null
+  };
+  clientByAgent.set(agent.name, client);
+  return client;
+}
+
+function setAgentState(name, text, live = false, busy = false, activity = '') {
+  const state = stateFor(name);
+  state.status = text;
+  state.live = live;
+  state.activity = activity || state.activity;
+  if (busy && !state.busySince) state.busySince = Date.now();
+  if (!busy) state.busySince = null;
+  if (current && current.name === name) renderStatus();
+}
+
+function renderStatus() {
+  if (!current) {
+    stateEl.textContent = 'disconnected';
+    activityEl.textContent = '';
+    dotEl.classList.remove('live');
+    sendEl.disabled = true;
+    stopEl.disabled = true;
+    return;
+  }
+  const state = stateFor(current.name);
+  stateEl.textContent = state.busySince ? `${state.status} ${elapsedText(state.busySince)}` : state.status;
+  activityEl.textContent = state.activity;
+  dotEl.classList.toggle('live', state.live);
+  sendEl.disabled = !state.live || !current;
+  stopEl.disabled = state.status === 'stopping' || state.status === 'stopped';
+}
+
+function elapsedText(startedAt) {
+  const seconds = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+}
+
+function createEntry(index, entry) {
   const item = document.createElement('div');
-  item.className = `entry ${kind}`;
-  item.textContent = text;
-  logEl.appendChild(item);
-  logEl.scrollTop = logEl.scrollHeight;
+  item.className = `entry ${entry.kind}`;
+  item.dataset.index = String(index);
+  item.textContent = entry.text;
   return item;
+}
+
+function renderLog(name) {
+  const state = stateFor(name);
+  logEl.innerHTML = '';
+  state.entries.forEach((entry, index) => logEl.appendChild(createEntry(index, entry)));
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+function appendEntry(name, text, kind = 'system') {
+  const state = stateFor(name);
+  const index = state.entries.push({text, kind}) - 1;
+  if (current && current.name === name) {
+    logEl.appendChild(createEntry(index, state.entries[index]));
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+  persistState();
+  return index;
+}
+
+function updateEntry(name, index) {
+  if (!current || current.name !== name) return;
+  const item = logEl.querySelector(`[data-index="${index}"]`);
+  if (item) item.textContent = stateFor(name).entries[index].text;
+  else renderLog(name);
+  logEl.scrollTop = logEl.scrollHeight;
 }
 
 async function loadAgents() {
@@ -212,19 +348,33 @@ async function loadAgents() {
     const button = document.createElement('button');
     button.type = 'button';
     button.className = `agent ${current && current.name === agent.name ? 'active' : ''}`;
-    button.innerHTML = `<span class="name">${agent.name}</span><span class="meta">${agent.status} - ${agent.websocket_url || 'no websocket'}</span>`;
+    const name = document.createElement('span');
+    name.className = 'name';
+    name.textContent = agent.name;
+    const meta = document.createElement('span');
+    meta.className = 'meta';
+    meta.textContent = agentMeta(agent);
+    button.append(name, meta);
     button.onclick = () => selectAgent(agent);
     agentsEl.appendChild(button);
   }
 }
 
+function agentMeta(agent) {
+  const model = agent.model ? `model ${agent.model}` : 'model unknown';
+  const effort = agent.reasoning_effort ? `effort ${agent.reasoning_effort}` : 'effort unknown';
+  return `${agent.status} - ${model} - ${effort} - ${agent.websocket_url || 'no websocket'}`;
+}
+
 function selectAgent(agent) {
+  if (current) stateFor(current.name).draft = messageEl.value;
   current = agent;
   selectedEl.textContent = agent.name;
-  endpointEl.textContent = agentSocketUrl(agent);
-  logEl.innerHTML = '';
-  write(`selected ${agent.name}`);
-  connect();
+  endpointEl.textContent = agentMeta(agent);
+  messageEl.value = stateFor(agent.name).draft;
+  renderLog(agent.name);
+  renderStatus();
+  connect(agent);
   loadAgents();
 }
 
@@ -233,101 +383,179 @@ function agentSocketUrl(agent) {
   return `${scheme}//${window.location.host}/agents/${encodeURIComponent(agent.name)}/ws`;
 }
 
-function connect() {
-  if (socket) socket.close();
-  pending = new Map();
-  initialized = null;
-  activeReply = null;
-  if (!current || !current.websocket_url) {
-    setState('no websocket');
+function connect(agent) {
+  const client = clientFor(agent);
+  if (client.socket && client.socket.readyState <= WebSocket.OPEN) {
+    renderStatus();
     return;
   }
-  setState('connecting');
-  socket = new WebSocket(agentSocketUrl(current));
-  socket.onopen = () => {
-    initialized = initialize();
+  client.pending = new Map();
+  client.initialized = null;
+  client.activeReplyIndex = null;
+  if (!agent.websocket_url) {
+    setAgentState(agent.name, 'no websocket');
+    return;
+  }
+  setAgentState(agent.name, 'connecting');
+  client.socket = new WebSocket(agentSocketUrl(agent));
+  client.socket.onopen = () => {
+    client.initialized = initialize(client).catch(error => {
+      appendEntry(agent.name, JSON.stringify(error), 'system');
+      setAgentState(agent.name, 'error');
+      throw error;
+    });
   };
-  socket.onmessage = event => handleEvent(JSON.parse(event.data));
-  socket.onclose = () => setState('disconnected');
-  socket.onerror = () => setState('error');
+  client.socket.onmessage = event => handleEvent(client, JSON.parse(event.data));
+  client.socket.onclose = () => setAgentState(agent.name, 'disconnected');
+  client.socket.onerror = () => setAgentState(agent.name, 'error');
 }
 
-async function initialize() {
-  await call('initialize', {
+async function initialize(client) {
+  await call(client, 'initialize', {
     clientInfo: {name: 'persistant-agent-web', title: 'Persistant Agent Web', version: '0.1.0'},
     capabilities: {experimentalApi: true}
   });
-  notify('initialized', {});
-  setState('connected', true);
+  notify(client, 'initialized', {});
+  setAgentState(client.agent.name, 'connected', true, false, 'ready');
 }
 
-function call(method, params) {
+function call(client, method, params) {
   const id = nextId++;
-  socket.send(JSON.stringify({id, method, params}));
-  return new Promise((resolve, reject) => pending.set(id, {resolve, reject}));
+  client.socket.send(JSON.stringify({id, method, params}));
+  return new Promise((resolve, reject) => client.pending.set(id, {resolve, reject, method}));
 }
 
-function notify(method, params) {
-  socket.send(JSON.stringify({method, params}));
+function notify(client, method, params) {
+  client.socket.send(JSON.stringify({method, params}));
 }
 
-function handleEvent(event) {
-  if (event.id && pending.has(event.id)) {
-    const waiter = pending.get(event.id);
-    pending.delete(event.id);
+function handleEvent(client, event) {
+  const name = client.agent.name;
+  if (event.id && client.pending.has(event.id)) {
+    const waiter = client.pending.get(event.id);
+    client.pending.delete(event.id);
     if (event.error) waiter.reject(event.error);
     else waiter.resolve(event.result || {});
     return;
   }
   if (event.method === 'item/agentMessage/delta') {
-    if (!activeReply) activeReply = write('', 'assistant');
-    activeReply.textContent += (event.params && event.params.delta) || '';
-    logEl.scrollTop = logEl.scrollHeight;
+    const state = stateFor(name);
+    if (client.activeReplyIndex === null) {
+      client.activeReplyIndex = appendEntry(name, '', 'assistant');
+    }
+    state.entries[client.activeReplyIndex].text += (event.params && event.params.delta) || '';
+    setAgentState(name, 'streaming', false, true, 'receiving response');
+    updateEntry(name, client.activeReplyIndex);
+    persistState();
     return;
   }
   if (event.method === 'turn/completed') {
-    activeReply = null;
-    setState('connected', true);
+    const state = stateFor(name);
+    const duration = state.busySince ? ` in ${elapsedText(state.busySince)}` : '';
+    client.activeReplyIndex = null;
+    appendEntry(name, `turn completed${duration}`, 'system');
+    setAgentState(name, 'connected', true, false, 'ready');
     return;
   }
   if (event.method === 'error') {
-    write(JSON.stringify(event.params || event), 'system');
-    setState('connected', true);
+    appendEntry(name, JSON.stringify(event.params || event), 'system');
+    setAgentState(name, 'connected', true, false, 'ready');
+    return;
   }
+  const summary = eventSummary(event);
+  if (summary) {
+    setAgentState(name, summary.state, false, true, summary.activity);
+    if (summary.log) appendEntry(name, summary.log);
+  }
+}
+
+function eventSummary(event) {
+  const method = event.method || '';
+  const params = event.params || {};
+  if (method === 'turn/started') return {state: 'running', activity: 'turn started'};
+  if (method.includes('tool') || method.includes('exec')) {
+    return {state: 'working', activity: params.name || params.command || method, log: params.name || params.command ? `${method}: ${params.name || params.command}` : ''};
+  }
+  if (method.includes('wait')) return {state: 'waiting', activity: method};
+  if (method.includes('reason') || method.includes('thinking')) return {state: 'thinking', activity: method};
+  if (method.endsWith('/completed')) return {state: 'running', activity: method};
+  return null;
 }
 
 async function sendMessage() {
   const text = messageEl.value.trim();
   if (!text || !current) return;
+  const agent = current;
+  const name = agent.name;
+  const client = clientFor(agent);
+  const state = stateFor(name);
   messageEl.value = '';
   sendEl.disabled = true;
-  setState('running', false);
-  write(`> ${text}`, 'user');
+  state.draft = '';
+  setAgentState(name, 'waiting', false, true, 'sending request');
+  appendEntry(name, `> ${text}`, 'user');
   try {
-    await initialized;
-    let threadId = threadByAgent.get(current.name);
-    if (!threadId) {
-      const result = await call('thread/start', {
+    await client.initialized;
+    if (!state.threadId) {
+      const result = await call(client, 'thread/start', {
         cwd: '/workspace/repo',
         approvalPolicy: 'never',
         sandbox: 'danger-full-access',
         ephemeral: false
       });
-      threadId = result.thread.id;
-      threadByAgent.set(current.name, threadId);
+      state.threadId = result.thread.id;
+      appendEntry(name, `thread ${state.threadId}`, 'system');
+      persistState();
     }
-    await call('turn/start', {threadId, cwd: '/workspace/repo', input: [{type: 'text', text}]});
+    await call(client, 'turn/start', {threadId: state.threadId, cwd: '/workspace/repo', input: [{type: 'text', text}]});
   } catch (error) {
-    write(JSON.stringify(error), 'system');
-    setState('connected', true);
+    appendEntry(name, JSON.stringify(error), 'system');
+    setAgentState(name, 'connected', true, false, 'ready');
+  }
+}
+
+async function stopCurrentAgent() {
+  if (!current) return;
+  const agent = current;
+  const name = agent.name;
+  stopEl.disabled = true;
+  sendEl.disabled = true;
+  setAgentState(name, 'stopping', false, true, 'stopping container');
+  appendEntry(name, 'stopping agent', 'system');
+  try {
+    const response = await fetch(`/agents/${encodeURIComponent(name)}/stop`, {method: 'POST'});
+    if (!response.ok) throw new Error(await response.text());
+    const client = clientByAgent.get(name);
+    if (client && client.socket) {
+      client.socket.onclose = null;
+      client.socket.onerror = null;
+      client.socket.close();
+    }
+    clientByAgent.delete(name);
+    agent.websocket_url = null;
+    agent.status = 'stopped';
+    endpointEl.textContent = agentMeta(agent);
+    setAgentState(name, 'stopped', false, false, 'stopped');
+    appendEntry(name, 'agent stopped', 'system');
+    await loadAgents();
+  } catch (error) {
+    appendEntry(name, JSON.stringify(error.message || error), 'system');
+    setAgentState(name, 'connected', true, false, 'ready');
   }
 }
 
 refreshEl.onclick = loadAgents;
 sendEl.onclick = sendMessage;
+stopEl.onclick = stopCurrentAgent;
 messageEl.addEventListener('keydown', event => {
   if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') sendMessage();
 });
+messageEl.addEventListener('input', () => {
+  if (!current) return;
+  stateFor(current.name).draft = messageEl.value;
+  persistState();
+});
+setInterval(renderStatus, 1000);
 
 loadAgents();
 </script>

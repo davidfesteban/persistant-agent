@@ -6,6 +6,8 @@ services:
       persistant-agent.managed: "true"
       persistant-agent.name: "${AGENT_NAME:?Set AGENT_NAME}"
       persistant-agent.repo: "${REPOSITORY_PATH:?Set REPOSITORY_PATH to the repo you want this agent to control}"
+      persistant-agent.model: "${CODEX_MODEL:-gpt-5.5}"
+      persistant-agent.reasoning_effort: "${CODEX_REASONING_EFFORT:-medium}"
     ports:
       - "${PERSISTANT_AGENT_BIND:-127.0.0.1::8080}"
     environment:

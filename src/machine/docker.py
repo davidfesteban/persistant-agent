@@ -16,6 +16,8 @@ class Agent(BaseModel):
     container: str
     status: str
     repo_path: str | None = None
+    model: str | None = None
+    reasoning_effort: str | None = None
     port: int | None = None
     api_url: str | None = None
     websocket_url: str | None = None
@@ -69,12 +71,15 @@ def agent_ready(agent: Agent) -> bool:
 
 def agent_from_container(container: dict) -> Agent:
     labels = container["Config"].get("Labels") or {}
+    env = container["Config"].get("Env") or []
     port = host_port(container)
     return Agent(
         name=labels.get("persistant-agent.name") or container["Name"].removeprefix("/persistant-agent-"),
         container=container["Name"].lstrip("/"),
         status=container["State"]["Status"],
         repo_path=labels.get("persistant-agent.repo"),
+        model=labels.get("persistant-agent.model") or env_value(env, "CODEX_MODEL"),
+        reasoning_effort=labels.get("persistant-agent.reasoning_effort") or env_value(env, "CODEX_REASONING_EFFORT"),
         port=port,
         api_url=f"http://127.0.0.1:{port}" if port else None,
         websocket_url=f"ws://127.0.0.1:{port}" if port else None,
@@ -91,6 +96,11 @@ def inspect(container: str) -> dict | None:
 def host_port(container: dict) -> int | None:
     binding = ((container["NetworkSettings"].get("Ports") or {}).get("8080/tcp") or [None])[0]
     return int(binding["HostPort"]) if binding else None
+
+
+def env_value(env: list[str], name: str) -> str | None:
+    prefix = f"{name}="
+    return next((value.removeprefix(prefix) for value in env if value.startswith(prefix)), None)
 
 
 def project(name: str) -> str:
